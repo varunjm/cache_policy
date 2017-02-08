@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #define ADDRESS_WIDTH 48
-
+#define DEBUG 1
 using namespace std;
 
 enum assoc{DIRECT=1, TWO_WAY, FOUR_WAY=4, EIGHT_WAY=8};
@@ -47,6 +47,13 @@ public:
         block_offset_width = log2(block_size);
         tag_width = ADDRESS_WIDTH - index_width - block_offset_width;
 
+        if(DEBUG) {
+            cout << "tag_width " << tag_width << endl;
+            cout << "index_width " << index_width << endl;
+            cout << "block_offset_width " << block_offset_width << endl;
+        }
+
+
         memory = (long **) malloc (sizeof(long *) * set_count);
         dirty = (bool **) malloc (sizeof(bool *) * set_count);
         empty = (bool **) malloc (sizeof(bool *) * set_count);
@@ -70,7 +77,6 @@ public:
                 }
             }
         }
-
     }
 
     void print_statistics() {
@@ -78,25 +84,44 @@ public:
         cout << read_hit << endl;
         // cout << write_miss << endl;
         // cout << write_hit << endl;
+    }
 
+    void print_lru_counters(long index) {
+        for(int i=0; i<associativity; i++)
+            cout << LRU_counter[index][i] << " ";
+        cout << endl;
     }
     void replace(long index, long tag) {
         if(repl_policy) {       // FIFO
             memory[index][FIFO_current[index]] = tag;
             FIFO_current[index] = (FIFO_current[index] + 1) % associativity;
         } else {                // LRU
-
+            for(int j=0; j<associativity; j++) {
+                if(LRU_counter[index][j] == associativity-1) {
+                    LRU_counter[index][j] = 0;
+                    memory[index][j] = tag;
+                } else {
+                    LRU_counter[index][j]++;
+                }
+            }
         }
     }
 
-    void update() {}
+    void update_counter(long index, long tag, int i) {
+        for(int j=0; j<associativity; j++) {
+            if(LRU_counter[index][i] > LRU_counter[index][j])
+                LRU_counter[index][j]++;            // Get incremented.
+        }
+        LRU_counter[index][i] = 0;                 // This becomes the most recently used
+    }
 
     void read(long address) {
         long index = (address >> block_offset_width) % (1 << index_width); // set number
         long tag = (address >> (block_offset_width + index_width)); // value stored
         bool hit = false;
-        int empty_index = -1;
-        for(int i=0; i<associativity; i++) {
+        int empty_index = -1, i;
+
+        for(i=0; i<associativity; i++) {
             if(memory[index][i] == tag) {
                 hit = true;
                 break;
@@ -105,19 +130,22 @@ public:
                 empty_index = i;
             }
         }
-        if(!hit) {
+        if(hit) {
+            read_hit++;
+            if(repl_policy == 0)                      // LRU
+                update_counter(index, tag, i);        // update least recently used
+        }
+        else {
             read_miss++;
-            if(empty_index == -1) {
+            if(empty_index == -1 || repl_policy == LRU) {
                 replace(index, tag);       // need extra variable for replacement policy (queue or fifo)
             } else {
                 memory[index][empty_index] = tag;
                 empty[index][empty_index] = 1;                  // not empty anymore
             }
         }
-        else {
-            read_hit++;
-            if(repl_policy == 0)        // LRU
-                update();               // update least recently used
+        if(DEBUG) {
+            cout << index <<  " " << tag << " " << hit << endl;
         }
     }
 
@@ -129,7 +157,7 @@ public:
 
 int main(int argc, char *argv[]) {
     // <BLOCKSIZE> <L1_SIZE> <L1_ASSOC> <L2_SIZE> <L2_ASSOC> <REPL_POLICY> <INCLUSION> <TRACE_FILE>
-    int block_size = 1024;
+    int block_size = 64;
     int l2_size = 65536;
     bool repl_policy = FIFO;
     char trace_file[20] = "test1.txt";
