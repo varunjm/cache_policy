@@ -82,7 +82,29 @@ class cache {
         int i;
 
         if(repl_policy == FIFO) {
-            for(i=0; memory[index][i] != tag; i++) ;
+            for(i=0; memory[index][i] != tag; i++) ;    // Find index of block to be evicted
+
+            if(dirty[index][i])
+                write_back++;
+            if(FIFO_current[index] == i) {
+                memory[index][i] = empty[index][i] = dirty[index][i] = 0;
+                FIFO_current[index] = ( FIFO_current[index] + 1 ) % associativity;
+            } else if(FIFO_current[index] > i) {
+                for(++i; i<FIFO_current[index]; i++) {
+                    memory[index][i-1] = memory[index][i];
+                    empty[index][i-1] = empty[index][i];
+                    dirty[index][i-1] = dirty[index][i];
+                }
+                memory[index][FIFO_current[index]-1] = empty[index][FIFO_current[index]-1] = dirty[index][FIFO_current[index]-1] = 0;
+            } else {
+                for(; i>FIFO_current[index]; i--) {
+                    memory[index][i] = memory[index][i-1];
+                    empty[index][i] = empty[index][i-1];
+                    dirty[index][i] = dirty[index][i-1];
+                }
+                FIFO_current[index]++;
+                memory[index][FIFO_current[index]-1] = empty[index][FIFO_current[index]-1] = dirty[index][FIFO_current[index]-1] = 0;
+            }
 
             if(FIFO_current[index] > i)                 // Update FIFO current pointer next earliest block
                 FIFO_current[index] =  ( FIFO_current[index] + associativity - 1 ) % associativity;
@@ -92,6 +114,8 @@ class cache {
                 empty[index][i] = empty[index][i+1];
                 dirty[index][i] = dirty[index][i+1];
             }
+        } else {
+
         }
     }
 
