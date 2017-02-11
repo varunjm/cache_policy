@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #define ADDRESS_WIDTH 48
-#define DEBUG 0
+#define DEBUG 1
 using namespace std;
 
 enum assoc{DIRECT=1, TWO_WAY, FOUR_WAY=4, EIGHT_WAY=8};
@@ -14,13 +14,23 @@ enum incls{INCLUSIVE, NINCLUSIVE, EXCLUSIVE};
 
 
 typedef struct f{
-    long evicted_block;
+    long evicted_address;
     bool evicted;
     bool miss;
 } FLAGS;
 
+FLAGS * get_flags_node() {
+    FLAGS *temp = (FLAGS *)malloc(sizeof(FLAGS));
+    temp->evicted = temp->miss = false;
+    temp->evicted_address = 0;
+
+    return temp;
+}
+
 class cache {
     private:
+
+    char name[10];
     // Cache character
     int block_size;
     int size;
@@ -50,21 +60,30 @@ class cache {
         return (((tag << index_width) + index) << block_offset_width);
     }
 
-    long replace(long index, long tag, int read_write) {        // Returns address of evicted block
+    void pi(long index) {
+        for(int i=0; i<associativity; i++)
+            cout << memory[index][i] << " ";
+        cout << endl;
+        return;
+    }
+
+    void replace(long index, long tag, int read_write, FLAGS *temp) {        // Returns address of evicted block
         long way, evicted;
 
         if(repl_policy == FIFO) {       // FIFO
             way = FIFO_current[index];
-            evicted = get_address(memory[index][way], index);
+            temp->evicted_address = get_address(memory[index][way], index);
             memory[index][way] = tag;
+            empty[index][way] = 1;
             FIFO_current[index] = (way + 1) % associativity;
         } else {                // LRU
             for(int j=0; j<associativity; j++) {
                 if(LRU_counter[index][j] == associativity-1) {
-                    evicted = get_address(memory[index][j], index);
-                    LRU_counter[index][j] = 0;
-                    memory[index][j] = tag;
                     way = j;
+                    temp->evicted_address = get_address(memory[index][way], index);
+                    memory[index][way] = tag;
+                    empty[index][way] = 1;
+                    LRU_counter[index][way] = 0;
                 } else {
                     LRU_counter[index][j]++;
                 }
@@ -73,50 +92,6 @@ class cache {
         if(dirty[index][way])                   // Write back if previous block was dirty
             write_back++;
         dirty[index][way] = read_write;         // Set dirty bit if write operation, else zero
-        return evicted;
-    }
-
-    void evict(long address) {
-        long index = (address >> block_offset_width) % (1 << index_width); // set number
-        long tag = (address >> (block_offset_width + index_width)); // value stored
-        int i;
-
-        if(repl_policy == FIFO) {
-            for(i=0; memory[index][i] != tag; i++) ;    // Find index of block to be evicted
-
-            if(dirty[index][i])
-                write_back++;
-            if(FIFO_current[index] == i) {
-                memory[index][i] = empty[index][i] = dirty[index][i] = 0;
-                FIFO_current[index] = ( FIFO_current[index] + 1 ) % associativity;
-            } else if(FIFO_current[index] > i) {
-                for(++i; i<FIFO_current[index]; i++) {
-                    memory[index][i-1] = memory[index][i];
-                    empty[index][i-1] = empty[index][i];
-                    dirty[index][i-1] = dirty[index][i];
-                }
-                memory[index][FIFO_current[index]-1] = empty[index][FIFO_current[index]-1] = dirty[index][FIFO_current[index]-1] = 0;
-            } else {
-                for(; i>FIFO_current[index]; i--) {
-                    memory[index][i] = memory[index][i-1];
-                    empty[index][i] = empty[index][i-1];
-                    dirty[index][i] = dirty[index][i-1];
-                }
-                FIFO_current[index]++;
-                memory[index][FIFO_current[index]-1] = empty[index][FIFO_current[index]-1] = dirty[index][FIFO_current[index]-1] = 0;
-            }
-
-            if(FIFO_current[index] > i)                 // Update FIFO current pointer next earliest block
-                FIFO_current[index] =  ( FIFO_current[index] + associativity - 1 ) % associativity;
-
-            for(; i<associativity-1; i++) {
-                memory[index][i] = memory[index][i+1];
-                empty[index][i] = empty[index][i+1];
-                dirty[index][i] = dirty[index][i+1];
-            }
-        } else {
-
-        }
     }
 
     void update_counter(long index, long tag, int i) {
@@ -128,11 +103,12 @@ class cache {
     }
 
     public:
-    cache(int b, int s, int a, bool rp) {
+    cache(int b, int s, int a, bool rp, char n[]) {
         block_size = b;
         size = s;
         associativity = a;
         repl_policy = rp;
+        strcpy(name, n);
 
         read_hit = write_hit = read_miss = write_miss = read_counter = write_counter = write_back = 0;
         set_count = size/(block_size*associativity);
@@ -188,18 +164,17 @@ class cache {
         cout << endl;
     }
 
-    FLAGS read(long address) {           // returns address of evicted block, else returns -1
+    FLAGS * read(long address) {           // returns address of evicted block, else returns -1
         long index = (address >> block_offset_width) % (1 << index_width); // set number
         long tag = (address >> (block_offset_width + index_width)); // value stored
         bool hit = false;
         int empty_index = -1, i;
-        FLAGS temp;
+        FLAGS *temp = get_flags_node();
 
         read_counter++;
         for(i=0; i<associativity; i++) {
-            if(memory[index][i] == tag) {
+            if(memory[index][i] == tag && empty[index][i] != 0) {
                 hit = true;
-                temp.miss = false;
                 break;
             }
             if(empty_index == -1 && empty[index][i] == 0) {
@@ -213,32 +188,33 @@ class cache {
         }
         else {
             read_miss++;
+            temp->miss = true;
             if(empty_index == -1 || repl_policy == LRU) {
-                temp.evicted_block = replace(index, tag, READ);       // need extra variable for replacement policy (queue or fifo)
-                temp.evicted = true;
+                replace(index, tag, READ, temp);       // need extra variable for replacement policy (queue or fifo)
+                temp->evicted = true;
             } else {
                 memory[index][empty_index] = tag;
                 empty[index][empty_index] = 1;                  // not empty anymore
             }
         }
         if(DEBUG) {
-            cout << READ << " " << index <<  " " << tag << " " << hit << endl;
+            cout << name << " " << READ << " " << index <<  " " << tag << " " << hit << endl;
         }
         return temp;
     }
 
-    FLAGS write(long address) {          // returns address of evicted block, else returns -1
+    FLAGS * write(long address) {          // returns address of evicted block, else returns -1
         long index = (address >> block_offset_width) % (1 << index_width); // set number
         long tag = (address >> (block_offset_width + index_width)); // value stored
         bool hit = false;
         int empty_index = -1, i;
-        FLAGS temp;
+        FLAGS * temp = get_flags_node();
 
         write_counter++;
         for(i=0; i<associativity; i++) {
             if(memory[index][i] == tag) {
                 hit = true;
-                temp.miss = false;
+                temp->miss = false;
                 break;
             }
             if(empty_index == -1 && empty[index][i] == 0) {
@@ -253,9 +229,10 @@ class cache {
         }
         else {
             write_miss++;
+            temp->miss = true;
             if(empty_index == -1 || repl_policy == LRU) {
-                replace(index, tag, WRITE);       // need extra variable for replacement policy (queue or fifo)
-                temp.evicted = true;
+                replace(index, tag, WRITE, temp);       // need extra variable for replacement policy (queue or fifo)
+                temp->evicted = true;
             } else {
                 memory[index][empty_index] = tag;
                 empty[index][empty_index] = 1;                  // not empty anymore
@@ -263,7 +240,51 @@ class cache {
             }
         }
         if(DEBUG) {
-            cout << WRITE << " " << index <<  " " << tag << " " << hit << endl;
+            cout << name << " " << WRITE << " " << index <<  " " << tag << " " << hit << endl;
+        }
+        return temp;
+    }
+
+    void evict(long address) {
+        long index = (address >> block_offset_width) % (1 << index_width); // set number
+        long tag = (address >> (block_offset_width + index_width)); // value stored
+        int i;
+
+        for(i=0; i < associativity; i++)     // Find index of block to be evicted
+            if(memory[index][i] == tag)
+                break;
+        if(i == associativity)
+            return;
+
+        if(repl_policy == FIFO) {
+            if(FIFO_current[index] == i) {
+                memory[index][i] = empty[index][i] = dirty[index][i] = 0;
+                FIFO_current[index] = ( FIFO_current[index] + 1 ) % associativity;
+            } else if(FIFO_current[index] > i) {
+                for(++i; i<FIFO_current[index]; i++) {
+                    memory[index][i-1] = memory[index][i];
+                    empty[index][i-1] = empty[index][i];
+                    dirty[index][i-1] = dirty[index][i];
+                }
+                memory[index][i-1] = empty[index][i-1] = dirty[index][i-1] = 0;   // i == FIFO_current[index]
+            } else {
+                for(; i>FIFO_current[index]; i--) {
+                    memory[index][i] = memory[index][i-1];
+                    empty[index][i] = empty[index][i-1];
+                    dirty[index][i] = dirty[index][i-1];
+                }
+                memory[index][i] = empty[index][i] = dirty[index][i] = 0;       // i == FIFO_current[index]
+                FIFO_current[index]++;
+            }
+            return;
+        } else {                    // LRU evict policy
+            int counter = LRU_counter[index][i];
+            memory[index][i] = empty[index][i] = dirty[index][i] = 0;
+            LRU_counter[index][i] = associativity - 1;
+            for(int j=0; j<associativity; j++) {
+                if(j != i && LRU_counter[index][j] > counter)
+                    LRU_counter[index][j]--;
+            }
         }
     }
 };
@@ -275,8 +296,8 @@ class hierarchy {
     int inclusion;
 
     public:
-    hierarchy(int b, int l1_size, int l1_assoc, int l2_size, int l2_assoc, bool rp, int incl)
-        : L1(b, l1_size, l1_assoc, rp), L2(b, l2_size, l2_assoc, rp) {
+    hierarchy(int b, int l1_size, int l1_assoc, int l2_size, int l2_assoc, bool rp, int incl, char n1[], char n2[])
+        : L1(b, l1_size, l1_assoc, rp, n1), L2(b, l2_size, l2_assoc, rp, n2) {
         inclusion = incl;
     }
 
@@ -288,16 +309,19 @@ class hierarchy {
     }
 
     void read(long address) {
-        FLAGS temp;
+        FLAGS * temp;
 
         switch(inclusion) {
             case INCLUSIVE: {
                 temp = L1.read(address);
-                if(temp.miss) {
+
+                if(temp->miss) {
+                    free(temp);
                     temp = L2.read(address);
-                    if(temp.evicted) {
-                        L1.evict(address);
+                    if(temp->evicted) {
+                        L1.evict(temp->evicted_address);
                     }
+                    free(temp);
                 }
             }
             case NINCLUSIVE: {
@@ -309,27 +333,49 @@ class hierarchy {
         }
     }
 
-    write() {
+    void write(long address) {
+        FLAGS * temp;
 
+        switch(inclusion) {
+            case INCLUSIVE: {
+                temp = L1.write(address);
+
+                if(temp->miss) {
+                    free(temp);
+                    temp = L2.write(address);
+                    if(temp->evicted) {
+                        L1.evict(temp->evicted_address);
+                    }
+                    free(temp);
+                }
+            }
+            case NINCLUSIVE: {
+
+            }
+            case EXCLUSIVE: {
+
+            }
+        }
     }
-}
+};
 
 int main(int argc, char *argv[]) {
     // <BLOCKSIZE> <L1_SIZE> <L1_ASSOC> <L2_SIZE> <L2_ASSOC> <REPL_POLICY> <INCLUSION> <TRACE_FILE>
     int block_size = 64;
-    int l1_size = 65536;
+    int l1_size = 32768;
     int l2_size = 262144;
     int l1_assoc = TWO_WAY;
-    int l2_assoc = TWO_WAY;
-    bool repl_policy = FIFO;
-    // char trace_file[20] = "test1.txt";
+    int l2_assoc = FOUR_WAY;
+    bool repl_policy = LRU;
     // char trace_file[20] = "./Traces/GCC.t";
+    char trace_file[20] = "test1.txt";
     // int inclusion =
 
     char read_write, address[20];
     long val;
+    char n1[20] = "L1", n2[20] = "L2";
     ifstream fin(trace_file, ifstream::binary);
-    hierarchy H(block_size, l1_size, l1_assoc, l2_size, l2_assoc, repl_policy, INCLUSIVE);
+    hierarchy H(block_size, l1_size, l1_assoc, l2_size, l2_assoc, repl_policy, INCLUSIVE, n1, n2);
 
     while(!fin.eof()) {
         fin >> read_write >> address;
