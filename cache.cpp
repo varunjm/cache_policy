@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #define ADDRESS_WIDTH 48
-#define DEBUG 1
+#define DEBUG 0
 using namespace std;
 
 enum assoc{DIRECT=1, TWO_WAY, FOUR_WAY=4, EIGHT_WAY=8};
@@ -15,13 +15,14 @@ enum incls{INCLUSIVE, NINCLUSIVE, EXCLUSIVE};
 
 typedef struct f{
     long evicted_address;
+    bool dirty;
     bool evicted;
     bool miss;
 } FLAGS;
 
 FLAGS * get_flags_node() {
     FLAGS *temp = (FLAGS *)malloc(sizeof(FLAGS));
-    temp->evicted = temp->miss = false;
+    temp->dirty = temp->evicted = temp->miss = false;
     temp->evicted_address = 0;
 
     return temp;
@@ -89,8 +90,10 @@ class cache {
                 }
             }
         }
-        if(dirty[index][way])                   // Write back if previous block was dirty
+        if(dirty[index][way]) {                  // Write back if previous block was dirty
             write_back++;
+            temp->dirty = true;
+        }
         dirty[index][way] = read_write;         // Set dirty bit if write operation, else zero
     }
 
@@ -173,7 +176,7 @@ class cache {
 
         read_counter++;
         for(i=0; i<associativity; i++) {
-            if(memory[index][i] == tag && empty[index][i] != 0) {
+            if(memory[index][i] == tag) {
                 hit = true;
                 break;
             }
@@ -309,19 +312,27 @@ class hierarchy {
     }
 
     void read(long address) {
-        FLAGS * temp;
+        FLAGS * temp1, * temp2;
 
         switch(inclusion) {
             case INCLUSIVE: {
-                temp = L1.read(address);
-
-                if(temp->miss) {
-                    free(temp);
-                    temp = L2.read(address);
-                    if(temp->evicted) {
-                        L1.evict(temp->evicted_address);
+                temp1 = L1.read(address);
+                if(temp1->miss) {
+                    // This order of statements is important:
+                    // 1.First L2 reads the missed block
+                    // 2.if there is a replacement,
+                    //  the replaced block from L2 is also removed from L1 (if it exists there)
+                    // 2. Then an old block (possibly dirty) is replaced in L1
+                    // 3. This replaced block if dirty is written back to L2
+                    temp2 = L2.read(address);
+                    if(temp2->evicted) {
+                        L1.evict(temp2->evicted_address);
                     }
-                    free(temp);
+                    if(temp1->dirty) {
+                        L2.write(temp1->evicted_address);
+                    }
+                    free(temp2);
+                    free(temp1);
                 }
             }
             case NINCLUSIVE: {
@@ -334,19 +345,27 @@ class hierarchy {
     }
 
     void write(long address) {
-        FLAGS * temp;
+        FLAGS * temp1, * temp2;
 
         switch(inclusion) {
             case INCLUSIVE: {
-                temp = L1.write(address);
-
-                if(temp->miss) {
-                    free(temp);
-                    temp = L2.write(address);
-                    if(temp->evicted) {
-                        L1.evict(temp->evicted_address);
+                temp1 = L1.write(address);
+                if(temp1->miss) {
+                    // This order of statements is important:
+                    // 1.First L2 reads the missed block
+                    // 2.if there is a replacement,
+                    //  the replaced block from L2 is also removed from L1 (if it exists there)
+                    // 2. Then an old block (possibly dirty) is replaced in L1
+                    // 3. This replaced block if dirty is written back to L2
+                    temp2 = L2.read(address);
+                    if(temp2->evicted) {
+                        L1.evict(temp2->evicted_address);
                     }
-                    free(temp);
+                    if(temp1->dirty) {
+                        L2.write(temp1->evicted_address);
+                    }
+                    free(temp2);
+                    free(temp1);
                 }
             }
             case NINCLUSIVE: {
@@ -364,11 +383,11 @@ int main(int argc, char *argv[]) {
     int block_size = 64;
     int l1_size = 32768;
     int l2_size = 262144;
-    int l1_assoc = TWO_WAY;
-    int l2_assoc = FOUR_WAY;
-    bool repl_policy = LRU;
-    // char trace_file[20] = "./Traces/GCC.t";
-    char trace_file[20] = "test1.txt";
+    int l1_assoc = FOUR_WAY;
+    int l2_assoc = EIGHT_WAY;
+    bool repl_policy = FIFO;
+    char trace_file[20] = "./Traces/GCC.t";
+    // char trace_file[20] = "test1.txt";
     // int inclusion =
 
     char read_write, address[20];
