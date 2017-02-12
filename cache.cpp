@@ -10,7 +10,7 @@ using namespace std;
 enum assoc{DIRECT=1, TWO_WAY, FOUR_WAY=4, EIGHT_WAY=8};
 enum rep_p{LRU, FIFO};
 enum rw{READ=0, WRITE=1};
-enum incls{INCLUSIVE, NINCLUSIVE, EXCLUSIVE};
+enum incls{NINCLUSIVE=0, INCLUSIVE, EXCLUSIVE};
 
 
 typedef struct f{
@@ -293,22 +293,29 @@ class cache {
 };
 
 class hierarchy {
-    cache L1;
-    cache L2;
+    cache *L1;
+    cache *L2;
 
     int inclusion;
 
     public:
-    hierarchy(int b, int l1_size, int l1_assoc, int l2_size, int l2_assoc, bool rp, int incl, char n1[], char n2[])
-        : L1(b, l1_size, l1_assoc, rp, n1), L2(b, l2_size, l2_assoc, rp, n2) {
+    hierarchy(int b, int l1_size, int l1_assoc, int l2_size, int l2_assoc, bool rp, int incl, char n1[], char n2[]) {
+        L1 = new cache(b, l1_size, l1_assoc, rp, n1);
+        L2 = new cache(b, l2_size, l2_assoc, rp, n2);
         inclusion = incl;
     }
 
+    hierarchy(int b, int l1_size, int l1_assoc, bool rp, char n1[]) {
+        L1 = new cache(b, l1_size, l1_assoc, rp, n1);
+        inclusion = -1;
+    }
     void print_statistics() {
         cout << "L1 : \n";
-        L1.print_statistics();
-        cout << "\nL2 : \n";
-        L2.print_statistics();
+        L1->print_statistics();
+        if(inclusion != -1) {
+            cout << "\nL2 : \n";
+            L2->print_statistics();
+        }
     }
 
     void read(long address) {
@@ -316,7 +323,7 @@ class hierarchy {
 
         switch(inclusion) {
             case INCLUSIVE: {
-                temp1 = L1.read(address);
+                temp1 = L1->read(address);
                 if(temp1->miss) {
                     // This order of statements is important:
                     // 1.First L2 reads the missed block
@@ -324,19 +331,19 @@ class hierarchy {
                     //  the replaced block from L2 is also removed from L1 (if it exists there)
                     // 2. Then an old block (possibly dirty) is replaced in L1
                     // 3. This replaced block if dirty is written back to L2
-                    temp2 = L2.read(address);
+                    temp2 = L2->read(address);
                     if(temp2->evicted) {
-                        L1.evict(temp2->evicted_address);
+                        L1->evict(temp2->evicted_address);
                     }
                     if(temp1->dirty) {
-                        L2.write(temp1->evicted_address);
+                        L2->write(temp1->evicted_address);
                     }
                     free(temp2);
                     free(temp1);
                 }
             }
             case NINCLUSIVE: {
-
+                L1->read(address);
             }
             case EXCLUSIVE: {
 
@@ -349,7 +356,7 @@ class hierarchy {
 
         switch(inclusion) {
             case INCLUSIVE: {
-                temp1 = L1.write(address);
+                temp1 = L1->write(address);
                 if(temp1->miss) {
                     // This order of statements is important:
                     // 1.First L2 reads the missed block
@@ -357,19 +364,19 @@ class hierarchy {
                     //  the replaced block from L2 is also removed from L1 (if it exists there)
                     // 2. Then an old block (possibly dirty) is replaced in L1
                     // 3. This replaced block if dirty is written back to L2
-                    temp2 = L2.read(address);
+                    temp2 = L2->read(address);
                     if(temp2->evicted) {
-                        L1.evict(temp2->evicted_address);
+                        L1->evict(temp2->evicted_address);
                     }
                     if(temp1->dirty) {
-                        L2.write(temp1->evicted_address);
+                        L2->write(temp1->evicted_address);
                     }
                     free(temp2);
                     free(temp1);
                 }
             }
             case NINCLUSIVE: {
-
+                L1->write(address);
             }
             case EXCLUSIVE: {
 
@@ -385,8 +392,8 @@ int main(int argc, char *argv[]) {
     int l2_size = 262144;
     int l1_assoc = FOUR_WAY;
     int l2_assoc = EIGHT_WAY;
-    bool repl_policy = FIFO;
-    char trace_file[20] = "./Traces/GCC.t";
+    bool repl_policy = LRU;
+    char trace_file[20] = "./Traces/MCF.t";
     // char trace_file[20] = "test1.txt";
     // int inclusion =
 
@@ -394,8 +401,13 @@ int main(int argc, char *argv[]) {
     long val;
     char n1[20] = "L1", n2[20] = "L2";
     ifstream fin(trace_file, ifstream::binary);
-    hierarchy H(block_size, l1_size, l1_assoc, l2_size, l2_assoc, repl_policy, INCLUSIVE, n1, n2);
+    hierarchy * H;
 
+    if(l2_size == 0) {
+        H = new hierarchy(block_size, l1_size, l1_assoc, repl_policy, n1);
+    } else {
+        H = new hierarchy(block_size, l1_size, l1_assoc, l2_size, l2_assoc, repl_policy, INCLUSIVE, n1, n2);
+    }
     while(!fin.eof()) {
         fin >> read_write >> address;
         if(fin.eof())
@@ -403,10 +415,10 @@ int main(int argc, char *argv[]) {
         val = strtol(address, NULL, 16);
 
         if(read_write == 'r')
-            H.read(val);
+            H->read(val);
         else
-            H.write(val);
+            H->write(val);
     }
-    H.print_statistics();
+    H->print_statistics();
     return 0;
 }
