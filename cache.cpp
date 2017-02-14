@@ -73,15 +73,21 @@ class cache {
 
         if(repl_policy == FIFO) {       // FIFO
             way = FIFO_current[index];
-            temp->evicted_address = get_address(memory[index][way], index);
+            if(empty[index][way] == 1) {
+                temp->evicted = true;
+                temp->evicted_address = get_address(memory[index][way], index);
+            }
             memory[index][way] = tag;
-            // empty[index][way] = 1;
+            empty[index][way] = 1;
             FIFO_current[index] = (way + 1) % associativity;
         } else {                // LRU
             for(int j=0; j<associativity; j++) {
                 if(LRU_counter[index][j] == (associativity-1)) {
                     way = j;
-                    temp->evicted_address = get_address(memory[index][way], index);
+                    if(empty[index][way] == 1) {
+                        temp->evicted = true;
+                        temp->evicted_address = get_address(memory[index][way], index);
+                    }
                     memory[index][way] = tag;
                     empty[index][way] = 1;
                     LRU_counter[index][way] = 0;
@@ -176,7 +182,7 @@ class cache {
 
         read_counter++;
         for(i=0; i<associativity; i++) {
-            if(memory[index][i] == tag) {
+            if(memory[index][i] == tag && empty[index][i] == 1) {       // Do not match if empty
                 hit = true;
                 break;
             }
@@ -194,7 +200,6 @@ class cache {
             temp->miss = true;
             if(empty_index == -1 || repl_policy == LRU) {
                 replace(index, tag, READ, temp);       // need extra variable for replacement policy (queue or fifo)
-                temp->evicted = true;
             } else {
                 memory[index][empty_index] = tag;
                 empty[index][empty_index] = 1;                  // not empty anymore
@@ -215,7 +220,7 @@ class cache {
 
         write_counter++;
         for(i=0; i<associativity; i++) {
-            if(memory[index][i] == tag) {
+            if(memory[index][i] == tag && empty[index][i] == 1) {
                 hit = true;
                 temp->miss = false;
                 break;
@@ -235,7 +240,6 @@ class cache {
             temp->miss = true;
             if(empty_index == -1 || repl_policy == LRU) {
                 replace(index, tag, WRITE, temp);       // need extra variable for replacement policy (queue or fifo)
-                temp->evicted = true;
             } else {
                 memory[index][empty_index] = tag;
                 empty[index][empty_index] = 1;                  // not empty anymore
@@ -252,32 +256,62 @@ class cache {
         long tag_index=-1;
         long index = (address >> block_offset_width) % (1 << index_width); // set number
         long tag = (address >> (block_offset_width + index_width)); // value stored
-        int j=0;
+        int j=0, count = 0;
 
         switch(repl_policy) {
             case FIFO: {
+                long *temp_memory = (long *)malloc(sizeof(long) * associativity);
+                bool *temp_dirty = (bool *)malloc(sizeof(bool) * associativity);
+                bool *temp_empty = (bool *)malloc(sizeof(bool) * associativity);
+                long FIFO_value = FIFO_current[index];
+
                 for(j=0; j<associativity; j++) {
-                    if(memory[index][j]==tag) {
-                        tag_index=j;
+                    if(memory[index][j]==tag && empty[index][j] == 1) {
+                        tag_index = j;
+                        break;
                     }
                 }
 
-                if((tag_index)==FIFO_current[index]) {
-                    dirty[index][tag_index]=0;
-                    empty[index][tag_index]=0;
-                    FIFO_current[index]=(FIFO_current[index]+1) % associativity;
-                } else {
-                    while(tag_index!=((FIFO_current[index]-1+associativity) % associativity)){
-                        memory[index][tag_index] = memory[index][((tag_index)+1) % associativity];
-                        tag_index = (tag_index+1) % associativity;
-                    }
+                if(j == associativity)
+                    return;
 
-                    if(tag_index==((FIFO_current[index]-1+associativity) % associativity))
-                    {
-                    dirty[index][tag_index]=0;
-                    empty[index][tag_index]=0;
-                    }
+                while(count < associativity) {
+                    j = (j+1) % associativity;
+                    temp_memory[count] = memory[index][j];
+                    temp_empty[count] = empty[index][j];
+                    temp_dirty[count] = dirty[index][j];
+                    count++;
                 }
+
+                if(temp_memory[associativity-1] == FIFO_value)
+                    FIFO_current[index] = 0;
+
+                for(j=0; j<associativity-1; j++) {
+                    if(temp_memory[j] == FIFO_value)
+                        FIFO_current[index] = j;
+                    memory[index][j] = temp_memory[j];
+                    empty[index][j] = temp_empty[j];
+                    dirty[index][j] = temp_dirty[j];
+                }
+
+                memory[index][associativity-1] = dirty[index][associativity-1] = empty[index][associativity-1] = 0;
+
+                // if((tag_index)==FIFO_current[index]) {
+                //     dirty[index][tag_index]=0;
+                //     empty[index][tag_index]=0;
+                //     FIFO_current[index]=(FIFO_current[index]+1) % associativity;
+                // } else {
+                //     while(tag_index!=((FIFO_current[index]-1+associativity) % associativity)){
+                //         memory[index][tag_index] = memory[index][((tag_index)+1) % associativity];
+                //         tag_index = (tag_index+1) % associativity;
+                //     }
+                //
+                //     if(tag_index==((FIFO_current[index]-1+associativity) % associativity))
+                //     {
+                //         dirty[index][tag_index]=0;
+                //         empty[index][tag_index]=0;
+                //     }
+                // }
                 break;
             }
             case LRU: {                    //LRU evict policy
@@ -285,6 +319,7 @@ class cache {
                     if(memory[index][j]==tag) {
                         memory[index][tag_index]=0;
                         dirty[index][tag_index]=0;
+                        empty[index][tag_index]=0;
                         tag_index=j;
                     }
                 }
@@ -399,11 +434,11 @@ class hierarchy {
 int main(int argc, char *argv[]) {
     // <BLOCKSIZE> <L1_SIZE> <L1_ASSOC> <L2_SIZE> <L2_ASSOC> <REPL_POLICY> <INCLUSION> <TRACE_FILE>
     int block_size = 64;
-    int l1_size = 32768;
+    int l1_size = 65536;
     int l2_size = 262144;
     int l1_assoc = TWO_WAY;
     int l2_assoc = FOUR_WAY;
-    bool repl_policy = LRU;
+    bool repl_policy = FIFO;
     char trace_file[20] = "./Traces/GCC.t";
     // char trace_file[20] = "test1.txt";
     // int inclusion =
